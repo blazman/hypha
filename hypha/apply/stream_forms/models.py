@@ -1,12 +1,16 @@
 # Credit to https://github.com/BertrandBordage for initial implementation
+import copy
 from collections import OrderedDict
 
 from wagtail.contrib.forms.models import AbstractForm
+
+from hypha.apply.funds.blocks import ApplicationMustIncludeFieldBlock
 
 from .blocks import (
     FormFieldBlock,
     GroupToggleBlock,
     GroupToggleEndBlock,
+    MultiInputCharFieldBlock,
     TextFieldBlock,
 )
 from .forms import BlockFieldWrapper, PageStreamBaseForm
@@ -42,7 +46,7 @@ class BaseStreamForm:
     def get_defined_fields(self):
         return self.form_fields
 
-    def get_form_fields(self):
+    def get_form_fields(self, draft=False):
         form_fields = OrderedDict()
         field_blocks = self.get_defined_fields()
         group_counter = 1
@@ -50,9 +54,10 @@ class BaseStreamForm:
         for struct_child in field_blocks:
             block = struct_child.block
             struct_value = struct_child.value
-
             if isinstance(block, FormFieldBlock):
                 field_from_block = block.get_field(struct_value)
+                if draft and not issubclass(block.__class__, ApplicationMustIncludeFieldBlock):
+                    field_from_block.required = False
                 field_from_block.help_link = struct_value.get('help_link')
                 field_from_block.group_number = group_counter if is_in_group else 1
                 if isinstance(block, GroupToggleBlock) and not is_in_group:
@@ -62,7 +67,25 @@ class BaseStreamForm:
                     is_in_group = True
                 if isinstance(block, TextFieldBlock):
                     field_from_block.word_limit = struct_value.get('word_limit')
-                form_fields[struct_child.id] = field_from_block
+                if isinstance(block, MultiInputCharFieldBlock):
+                    number_of_inputs = struct_value.get('number_of_inputs')
+                    for index in range(number_of_inputs):
+                        form_fields[struct_child.id + '_' + str(index)] = field_from_block
+                        field_from_block.multi_input_id = struct_child.id
+                        field_from_block.add_button_text = struct_value.get('add_button_text')
+                        if index == number_of_inputs - 1:  # Add button after last input field
+                            field_from_block.multi_input_add_button = True
+                            # Index for field until which fields will be visible to applicant.
+                            # Initially only the first field with id UUID_0 will be visible.
+                            field_from_block.visibility_index = 0
+                            field_from_block.max_index = index
+                        if index != 0:
+                            field_from_block.multi_input_field = True
+                            field_from_block.required = False
+                            field_from_block.initial = None
+                        field_from_block = copy.copy(field_from_block)
+                else:
+                    form_fields[struct_child.id] = field_from_block
             elif isinstance(block, GroupToggleEndBlock):
                 # Group toogle end block is used only to group fields and not used in actual form.
                 # Todo: Use streamblock to create nested form field blocks, a more elegant method to group form fields.
@@ -74,8 +97,8 @@ class BaseStreamForm:
 
         return form_fields
 
-    def get_form_class(self):
-        return type('WagtailStreamForm', (self.submission_form_class,), self.get_form_fields())
+    def get_form_class(self, draft=False):
+        return type('WagtailStreamForm', (self.submission_form_class,), self.get_form_fields(draft))
 
 
 class AbstractStreamForm(BaseStreamForm, AbstractForm):
