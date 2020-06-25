@@ -214,18 +214,7 @@ class AccessFormData:
             if field_id not in self.named_blocks
         ]
 
-    def serialize(self, field_id):
-        field = self.field(field_id)
-        if isinstance(field.block, MultiInputCharFieldBlock):
-            data = self.get_multi_inputs_answer(field)
-        else:
-            data = self.data(field_id)
-        return field.render(context={
-            'serialize': True,
-            'data': data,
-        })
-
-    def get_multi_inputs_answer(self, field):
+    def get_serialize_multi_inputs_answer(self, field):
         number_of_inputs = field.value.get('number_of_inputs')
         answers = [
             self.data(field.id + '_' + str(i))
@@ -234,13 +223,42 @@ class AccessFormData:
         data = ', '.join(filter(None, answers))
         return data
 
+    def serialize(self, field_id):
+        field = self.field(field_id)
+        if isinstance(field.block, MultiInputCharFieldBlock):
+            data = self.get_serialize_multi_inputs_answer(field)
+        else:
+            data = self.data(field_id)
+        return field.render(context={
+            'serialize': True,
+            'data': data,
+        })
+
+    def get_multi_inputs_answer(self, field, include_question=False):
+        number_of_inputs = field.value.get('number_of_inputs')
+        answers = [
+            self.data(field.id + '_' + str(i))
+            for i in range(number_of_inputs)
+        ]
+
+        render_data = [
+            field.render(
+                context={
+                    'data': answer,
+                    'include_question': include_question if i == 0 else False
+                })
+            for i, answer in enumerate(filter(None, answers))
+        ]
+        return ''.join(render_data).replace('</section>', '') + '</section>'
+
     def render_answer(self, field_id, include_question=False):
         try:
             field = self.field(field_id)
         except UnusedFieldException:
             return '-'
         if isinstance(field.block, MultiInputCharFieldBlock):
-            data = self.get_multi_inputs_answer(field)
+            render_data = self.get_multi_inputs_answer(field, include_question)
+            return render_data
         else:
             data = self.data(field_id)
         # Some migrated content have empty address.
