@@ -3,11 +3,11 @@ import bleach
 from dateutil.parser import isoparse, parse
 from django import forms
 from django.conf import settings
-from django.core.validators import FileExtensionValidator
 from django.db.models import BLANK_CHOICE_DASH
 from django.forms.widgets import ClearableFileInput
 from django.utils.dateparse import parse_datetime
 from django.utils.encoding import force_str
+from django.utils.html import conditional_escape
 from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
 from django_bleach.templatetags.bleach_tags import bleach_value
@@ -29,7 +29,7 @@ from wagtail.core.blocks import (
     URLBlock,
 )
 
-from .fields import MultiFileField
+from .fields import MultiFileField, SingleFileField
 
 
 class FormFieldBlock(StructBlock):
@@ -55,7 +55,7 @@ class FormFieldBlock(StructBlock):
     def get_field_kwargs(self, struct_value):
         kwargs = {
             'label': struct_value['field_label'],
-            'help_text': struct_value['help_text'],
+            'help_text': conditional_escape(struct_value['help_text']),
             'required': struct_value.get('required', False)
         }
         if 'default_value' in struct_value:
@@ -413,8 +413,7 @@ class FileFieldBlock(UploadableMediaBlock):
 
     You must implement this if you want to reuse it.
     """
-    field_class = forms.FileField
-    widget = ClearableFileInput
+    field_class = SingleFileField
 
     class Meta:
         label = _('File field')
@@ -422,10 +421,7 @@ class FileFieldBlock(UploadableMediaBlock):
 
     def get_field_kwargs(self, struct_value):
         kwargs = super().get_field_kwargs(struct_value)
-        kwargs['validators'] = [
-            FileExtensionValidator(allowed_extensions=settings.FILE_ALLOWED_EXTENSIONS)
-        ]
-        kwargs['widget'] = self.get_widget(struct_value)(attrs={'accept': settings.FILE_ACCEPT_ATTR_VALUE})
+        kwargs['help_text'] = kwargs['help_text'] + f" Accepted file types are {settings.FILE_ACCEPT_ATTR_VALUE}"
         return kwargs
 
 
@@ -436,6 +432,11 @@ class MultiFileFieldBlock(UploadableMediaBlock):
         label = _('Multiple File field')
         template = 'stream_forms/render_multi_file_field.html'
 
+    def get_field_kwargs(self, struct_value):
+        kwargs = super().get_field_kwargs(struct_value)
+        kwargs['help_text'] = kwargs['help_text'] + f" Accepted file types are {settings.FILE_ACCEPT_ATTR_VALUE}"
+        return kwargs
+
     def prepare_data(self, value, data, serialize):
         if serialize:
             return [file.serialize() for file in data]
@@ -445,8 +446,24 @@ class MultiFileFieldBlock(UploadableMediaBlock):
         return [super().no_response()]
 
 
+class HeadingBlock(StructBlock):
+    HEADER_SIZE = [
+        ('h2', 'H2'),
+        ('h3', 'H3'),
+        ('h4', 'H4')
+    ]
+
+    heading_text = CharBlock(classname="title", required=True)
+    size = ChoiceBlock(choices=HEADER_SIZE, default='h2')
+
+    class Meta:
+        icon = "title"
+        template = "stream_forms/heading_field.html"
+
+
 class FormFieldsBlock(StreamBlock):
-    text_markup = RichTextBlock(group=_('Custom'), label=_('Section text/header'))
+    text_markup = RichTextBlock(group=_('Custom'), label=_('Section text'))
+    header_markup = HeadingBlock(group=_('Custom'), label=_('Section header'))
     char = CharFieldBlock(group=_('Fields'))
     multi_inputs_char = MultiInputCharFieldBlock(group=_('Fields'))
     text = TextFieldBlock(group=_('Fields'))

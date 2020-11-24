@@ -99,6 +99,7 @@
         // sass-lint:disable class-name-format
         &--image_field,
         &--multi_file_field,
+        &--single_file_field,
         &--file_field {
             @include button($color--light-blue, $color--dark-blue);
             max-width: 290px;
@@ -276,7 +277,6 @@
     }
 
     &__help-link {
-        text-align: right;
     }
 
     &__open-icon {
@@ -305,8 +305,11 @@
         }
 
         .form__filters & {
-            background: $color--white;
             max-width: 100%;
+
+            select {
+                height: $dropdown-height;
+            }
         }
 
         select[multiple='multiple'] {

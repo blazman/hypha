@@ -1,26 +1,23 @@
 from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
 from django.db import transaction
-from django.db.models import Prefetch, Q
+from django.db.models import Prefetch
 from django.utils import timezone
 from django_filters import rest_framework as filters
-from rest_framework import generics, mixins, permissions
+from rest_framework import mixins, permissions, viewsets
+from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from rest_framework_api_key.permissions import HasAPIKey
-from wagtail.core.models import Page
 
 from hypha.apply.activity.messaging import MESSAGES, messenger
 from hypha.apply.activity.models import COMMENT, Activity
 from hypha.apply.determinations.views import DeterminationCreateOrUpdateView
-from hypha.apply.funds.models import (
-    ApplicationSubmission,
-    FundType,
-    LabType,
-    RoundsAndLabs,
-)
-from hypha.apply.funds.workflow import PHASES
+from hypha.apply.funds.models import ApplicationSubmission, RoundsAndLabs
 from hypha.apply.review.models import Review
 
+from .filters import CommentFilter, SubmissionsFilter
+from .mixin import SubmissionNestedMixin
 from .pagination import StandardResultsSetPagination
 from .permissions import IsApplyStaffUser, IsAuthor
 from .serializers import (
@@ -32,44 +29,11 @@ from .serializers import (
     SubmissionActionSerializer,
     SubmissionDetailSerializer,
     SubmissionListSerializer,
+    UserSerializer,
 )
 
 
-class RoundLabFilter(filters.ModelChoiceFilter):
-    def filter(self, qs, value):
-        if not value:
-            return qs
-
-        return qs.filter(Q(round=value) | Q(page=value))
-
-
-class SubmissionsFilter(filters.FilterSet):
-    round = RoundLabFilter(queryset=RoundsAndLabs.objects.all())
-    status = filters.MultipleChoiceFilter(choices=PHASES)
-    active = filters.BooleanFilter(method='filter_active', label='Active')
-    submit_date = filters.DateFromToRangeFilter(field_name='submit_time', label='Submit date')
-    fund = filters.ModelMultipleChoiceFilter(
-        field_name='page', label='fund',
-        queryset=Page.objects.type(FundType) | Page.objects.type(LabType)
-    )
-
-    class Meta:
-        model = ApplicationSubmission
-        fields = ('status', 'round', 'active', 'submit_date', 'fund', )
-
-    def filter_active(self, qs, name, value):
-        if value is None:
-            return qs
-
-        if value:
-            return qs.active()
-        else:
-            return qs.inactive()
-
-
-class SubmissionList(generics.ListAPIView):
-    queryset = ApplicationSubmission.objects.current().with_latest_update()
-    serializer_class = SubmissionListSerializer
+class SubmissionViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = (
         HasAPIKey | permissions.IsAuthenticated, HasAPIKey | IsApplyStaffUser,
     )
@@ -77,25 +41,52 @@ class SubmissionList(generics.ListAPIView):
     filter_class = SubmissionsFilter
     pagination_class = StandardResultsSetPagination
 
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return SubmissionListSerializer
+        return SubmissionDetailSerializer
 
-class SubmissionDetail(generics.RetrieveAPIView):
-    queryset = ApplicationSubmission.objects.all().prefetch_related(
-        Prefetch('reviews', Review.objects.submitted()),
-    )
-    serializer_class = SubmissionDetailSerializer
-    permission_classes = (
-        permissions.IsAuthenticated, IsApplyStaffUser,
-    )
+    def get_queryset(self):
+        if self.action == 'list':
+            return ApplicationSubmission.objects.current().with_latest_update()
+        return ApplicationSubmission.objects.all().prefetch_related(
+            Prefetch('reviews', Review.objects.submitted()),
+        )
 
 
-class SubmissionAction(generics.RetrieveAPIView):
-    queryset = ApplicationSubmission.objects.all()
+class SubmissionActionViewSet(
+    SubmissionNestedMixin,
+    viewsets.GenericViewSet
+):
     serializer_class = SubmissionActionSerializer
     permission_classes = (
         permissions.IsAuthenticated, IsApplyStaffUser,
     )
 
-    def post(self, request, *args, **kwargs):
+    def get_object(self):
+        return self.get_submission_object()
+
+    def list(self, request, *args, **kwargs):
+        """
+        List all the actions that can be taken on a submission.
+
+        E.g. All the states this submission can be transistion to.
+        """
+        obj = self.get_object()
+        ser = self.get_serializer(obj)
+        return Response(ser.data)
+
+    def create(self, request, *args, **kwargs):
+        """
+        Transistion a submission from one state to other.
+
+        E.g. To transition a submission from `Screening` to `Internal Review`
+        following post data can be used:
+
+        ```
+        {"action": "internal_review"}
+        ```
+        """
         action = request.data.get('action')
         if not action:
             raise ValidationError('Action must be provided.')
@@ -125,64 +116,37 @@ class SubmissionAction(generics.RetrieveAPIView):
         })
 
 
-class RoundLabDetail(generics.RetrieveAPIView):
+class RoundViewSet(
+    mixins.RetrieveModelMixin,
+    mixins.ListModelMixin,
+    viewsets.GenericViewSet
+):
     queryset = RoundsAndLabs.objects.all()
-    serializer_class = RoundLabDetailSerializer
-    permission_classes = (
-        permissions.IsAuthenticated, IsApplyStaffUser,
-    )
-
-    def get_object(self):
-        return super().get_object().specific
-
-
-class RoundLabList(generics.ListAPIView):
-    queryset = RoundsAndLabs.objects.specific()
     serializer_class = RoundLabSerializer
     permission_classes = (
         permissions.IsAuthenticated, IsApplyStaffUser,
     )
     pagination_class = StandardResultsSetPagination
 
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return RoundLabSerializer
+        return RoundLabDetailSerializer
 
-class NewerThanFilter(filters.ModelChoiceFilter):
-    def filter(self, qs, value):
-        if not value:
-            return qs
-
-        return qs.newer(value)
-
-
-class CommentFilter(filters.FilterSet):
-    since = filters.DateTimeFilter(field_name="timestamp", lookup_expr='gte')
-    before = filters.DateTimeFilter(field_name="timestamp", lookup_expr='lte')
-    newer = NewerThanFilter(queryset=Activity.comments.all())
-
-    class Meta:
-        model = Activity
-        fields = ['visibility', 'since', 'before', 'newer']
+    def get_object(self):
+        obj = super(RoundViewSet, self).get_object()
+        return obj.specific
 
 
-class AllCommentFilter(CommentFilter):
-    class Meta(CommentFilter.Meta):
-        fields = CommentFilter.Meta.fields + ['source_object_id']
-
-
-class CommentList(generics.ListAPIView):
-    queryset = Activity.comments.all()
-    serializer_class = CommentSerializer
-    permission_classes = (
-        permissions.IsAuthenticated, IsApplyStaffUser,
-    )
-    filter_backends = (filters.DjangoFilterBackend,)
-    filter_class = AllCommentFilter
-    pagination_class = StandardResultsSetPagination
-
-    def get_queryset(self):
-        return super().get_queryset().visible_to(self.request.user)
-
-
-class CommentListCreate(generics.ListCreateAPIView):
+class SubmissionCommentViewSet(
+    SubmissionNestedMixin,
+    mixins.ListModelMixin,
+    mixins.CreateModelMixin,
+    viewsets.GenericViewSet
+):
+    """
+    List all the comments on a submission.
+    """
     queryset = Activity.comments.all().select_related('user')
     serializer_class = CommentCreateSerializer
     permission_classes = (
@@ -194,15 +158,18 @@ class CommentListCreate(generics.ListCreateAPIView):
 
     def get_queryset(self):
         return super().get_queryset().filter(
-            submission=self.kwargs['pk']
+            submission=self.get_submission_object()
         ).visible_to(self.request.user)
 
     def perform_create(self, serializer):
+        """
+        Add a comment on a submission.
+        """
         obj = serializer.save(
             timestamp=timezone.now(),
             type=COMMENT,
             user=self.request.user,
-            source=ApplicationSubmission.objects.get(pk=self.kwargs['pk'])
+            source=self.get_submission_object()
         )
         messenger(
             MESSAGES.COMMENT,
@@ -213,22 +180,33 @@ class CommentListCreate(generics.ListCreateAPIView):
         )
 
 
-class CommentEdit(
-        mixins.RetrieveModelMixin,
-        mixins.CreateModelMixin,
-        generics.GenericAPIView,
+class CommentViewSet(
+        mixins.ListModelMixin,
+        viewsets.GenericViewSet,
 ):
+    """
+    Edit a comment.
+    """
     queryset = Activity.comments.all().select_related('user')
     serializer_class = CommentEditSerializer
     permission_classes = (
         permissions.IsAuthenticated, IsAuthor
     )
 
-    def post(self, request, *args, **kwargs):
-        return self.edit(request, *args, **kwargs)
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return CommentSerializer
+        return CommentEditSerializer
+
+    def get_queryset(self):
+        return super().get_queryset().visible_to(self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def edit(self, request, *args, **kwargs):
+        return self.edit_comment(request, *args, **kwargs)
 
     @transaction.atomic
-    def edit(self, request, *args, **kwargs):
+    def edit_comment(self, request, *args, **kwargs):
         comment_to_edit = self.get_object()
         comment_to_update = self.get_object()
 
@@ -246,3 +224,14 @@ class CommentEdit(
             return Response(serializer.data)
 
         return Response(self.get_serializer(comment_to_update).data)
+
+    def perform_create(self, serializer):
+        serializer.save()
+
+
+class CurrentUser(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, format=None):
+        ser = UserSerializer(request.user)
+        return Response(ser.data)

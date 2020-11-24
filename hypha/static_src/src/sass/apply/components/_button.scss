@@ -29,6 +29,10 @@
         }
     }
 
+    &--left-space {
+        margin-left: 20px;
+    }
+
     &--contains-icons {
         display: flex;
         align-items: center;
@@ -50,6 +54,15 @@
 
         &:hover {
             color: $color--white;
+        }
+    }
+
+    &--cookieconsent {
+        @include button(transparent, $color--white);
+
+        &:focus,
+        &:hover {
+            color: $color--dark-blue;
         }
     }
 

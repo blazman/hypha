@@ -66,6 +66,7 @@ if 'SERVER_EMAIL' in env:
 INSTALLED_APPS = [
     'scout_apm.django',
 
+    'hypha.cookieconsent',
     'hypha.images',
 
     'hypha.apply.activity',
@@ -127,14 +128,18 @@ INSTALLED_APPS = [
     'django_otp.plugins.otp_totp',
     'django_otp.plugins.otp_static',
     'two_factor',
+    'drf_yasg',
     'rest_framework',
     'rest_framework_api_key',
     'wagtailcache',
+    'django_file_form',
 
     'hijack',
     'compat',
     'pagedown',
     'webpack_loader',
+
+    'salesforce',
 
     'django.contrib.admin',
     'django.contrib.auth',
@@ -188,6 +193,7 @@ TEMPLATES = [
                 'social_django.context_processors.backends',
                 'social_django.context_processors.login_redirect',
                 'hypha.apply.projects.context_processors.projects_enabled',
+                'hypha.cookieconsent.context_processors.cookies_accepted',
             ],
         },
     },
@@ -255,6 +261,17 @@ else:
             'TIMEOUT': WAGTAIL_CACHE_TIMEOUT,
         }
     }
+
+# Use a more permanent cache for django-file-form.
+# It uses it to store metadata about files while they are being uploaded.
+# This might reduce the likelihood of any interruptions on heroku.
+# NB It doesn't matter what the `KEY_PREFIX` is,
+# `clear_cache` will clear all caches with the same `LOCATION`.
+CACHES['django_file_form'] = {
+    'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+    'LOCATION': 'database_cache',
+    'KEY_PREFIX': 'django_file_form',
+}
 
 WAGTAIL_CACHE_BACKEND = 'wagtailcache'
 
@@ -672,3 +689,36 @@ if env.get('PROJECTS_ENABLED', 'false').lower().strip() == 'true':
 PROJECTS_AUTO_CREATE = False
 if env.get('PROJECTS_AUTO_CREATE', 'false').lower().strip() == 'true':
     PROJECTS_AUTO_CREATE = True
+
+
+# Salesforce integration
+
+if env.get('SALESFORCE_INTEGRATION', 'false').lower().strip() == 'true':
+    DATABASES = {
+        **DATABASES,
+        'salesforce': {
+            'ENGINE': 'salesforce.backend',
+            'CONSUMER_KEY': env.get('SALESFORCE_CONSUMER_KEY', ''),
+            'CONSUMER_SECRET': env.get('SALESFORCE_CONSUMER_SECRET', ''),
+            'USER': env.get('SALESFORCE_USER', ''),
+            'PASSWORD': env.get('SALESFORCE_PASSWORD', ''),
+            'HOST': env.get('SALESFORCE_LOGIN_URL', '')
+        }
+    }
+
+    SALESFORCE_QUERY_TIMEOUT = (30, 30)  # (connect timeout, data timeout)
+
+    DATABASE_ROUTERS = [
+        "salesforce.router.ModelRouter"
+    ]
+
+
+# django-file-form settings
+
+FILE_FORM_CACHE = 'django_file_form'
+FILE_FORM_UPLOAD_DIR = 'temp_uploads'
+# Ensure FILE_FORM_UPLOAD_DIR exists:
+os.makedirs(os.path.join(MEDIA_ROOT, FILE_FORM_UPLOAD_DIR), exist_ok=True)
+# Store temporary files on S3 too (files are still uploaded to local filesystem first)
+if 'AWS_STORAGE_BUCKET_NAME' in env:
+    FILE_FORM_TEMP_STORAGE = PRIVATE_FILE_STORAGE

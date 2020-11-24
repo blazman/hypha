@@ -1,4 +1,4 @@
-{% load static cache wagtailuserbar wagtailcore_tags wagtailimages_tags navigation_tags util_tags %}<!doctype html>
+{% load static cache wagtailuserbar wagtailcore_tags wagtailimages_tags navigation_tags util_tags cookieconsent_tags %}<!doctype html>
 {% wagtail_site as current_site %}
 <html class="no-js" lang="en">
     <head>
@@ -196,13 +196,17 @@
 
         </footer>
 
+        {% cookie_banner %}
+
         <script src="//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>
         <script>
             function googleTranslateElementInit() {
               new google.translate.TranslateElement({pageLanguage: 'en', layout: google.translate.TranslateElement.InlineLayout.SIMPLE, autoDisplay: false}, 'google_translate_element');
             }
         </script>
+        <script src="{% static 'js/js.cookie.min.js' %}"></script>
         <script src="{% static 'js/main.js' %}"></script>
+        <script src="{% static 'js/cookieconsent.js' %}"></script>
         {% block extra_js %}{% endblock %}
     </body>
 </html>

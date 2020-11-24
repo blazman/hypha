@@ -27,6 +27,7 @@ from django.views.generic import (
     UpdateView,
 )
 from django.views.generic.detail import SingleObjectMixin
+from django_file_form.models import PlaceholderUploadedFile
 from django_filters.views import FilterView
 from django_tables2.paginators import LazyPaginator
 from django_tables2.views import SingleTableMixin
@@ -47,6 +48,7 @@ from hypha.apply.projects.models import Project
 from hypha.apply.review.models import Review
 from hypha.apply.review.views import ReviewContextMixin
 from hypha.apply.users.decorators import staff_required
+from hypha.apply.utils.models import PDFPageSettings
 from hypha.apply.utils.pdfs import draw_submission_content, make_pdf
 from hypha.apply.utils.storage import PrivateMediaView
 from hypha.apply.utils.views import (
@@ -58,6 +60,7 @@ from hypha.apply.utils.views import (
 from .differ import compare
 from .files import generate_submission_file_path
 from .forms import (
+    BatchDeleteSubmissionForm,
     BatchProgressSubmissionForm,
     BatchUpdateReviewersForm,
     BatchUpdateSubmissionLeadForm,
@@ -76,6 +79,7 @@ from .models import (
     LabBase,
     Reminder,
     ReviewerRole,
+    ReviewerSettings,
     RoundBase,
     RoundsAndLabs,
 )
@@ -257,6 +261,27 @@ class BatchUpdateReviewersView(UpdateReviewersMixin, DelegatedViewMixin, FormVie
 
 
 @method_decorator(staff_required, name='dispatch')
+class BatchDeleteSubmissionView(DelegatedViewMixin, FormView):
+    form_class = BatchDeleteSubmissionForm
+    context_name = 'batch_delete_submission_form'
+
+    def form_valid(self, form):
+        submissions = form.cleaned_data['submissions']
+        messenger(
+            MESSAGES.BATCH_DELETE_SUBMISSION,
+            request=self.request,
+            user=self.request.user,
+            sources=submissions,
+        )
+        form.save()
+        return super().form_valid(form)
+
+    def form_invalid(self, form):
+        messages.error(self.request, mark_safe(_('Sorry something went wrong') + form.errors.as_ul()))
+        return super().form_invalid(form)
+
+
+@method_decorator(staff_required, name='dispatch')
 class BatchProgressSubmissionView(DelegatedViewMixin, FormView):
     form_class = BatchProgressSubmissionForm
     context_name = 'batch_progress_form'
@@ -328,7 +353,16 @@ class BaseReviewerSubmissionsTable(BaseAdminSubmissionsTable):
     filterset_class = SubmissionReviewerFilterAndSearch
 
     def get_queryset(self):
-        # Reviewers can only see submissions they have reviewed
+        '''
+        If use_settings variable is set for ReviewerSettings use settings
+        parameters to filter submissions or return only reviewed_by as it
+        was by default.
+        '''
+        reviewer_settings = ReviewerSettings.for_request(self.request)
+        if reviewer_settings.use_settings:
+            return super().get_queryset().for_reviewer_settings(
+                self.request.user, reviewer_settings
+            ).order_by('-submit_time')
         return super().get_queryset().reviewed_by(self.request.user)
 
 
@@ -397,6 +431,7 @@ class SubmissionAdminListView(BaseAdminSubmissionsTable, DelegateableListView):
         BatchUpdateLeadView,
         BatchUpdateReviewersView,
         BatchProgressSubmissionView,
+        BatchDeleteSubmissionView,
     ]
 
 
@@ -435,6 +470,7 @@ class SubmissionsByRound(BaseAdminSubmissionsTable, DelegateableListView):
         BatchUpdateLeadView,
         BatchUpdateReviewersView,
         BatchProgressSubmissionView,
+        BatchDeleteSubmissionView,
     ]
 
     excluded_fields = ('round', 'lead', 'fund')
@@ -467,6 +503,7 @@ class SubmissionsByStatus(BaseAdminSubmissionsTable, DelegateableListView):
         BatchUpdateLeadView,
         BatchUpdateReviewersView,
         BatchProgressSubmissionView,
+        BatchDeleteSubmissionView,
     ]
 
     def dispatch(self, request, *args, **kwargs):
@@ -737,6 +774,18 @@ class ReviewerSubmissionDetailView(ReviewContextMixin, ActivityContextMixin, Del
             return ApplicantSubmissionDetailView.as_view()(request, *args, **kwargs)
         if submission.status == DRAFT_STATE:
             raise Http404
+
+        reviewer_settings = ReviewerSettings.for_request(request)
+        if reviewer_settings.use_settings:
+            queryset = ApplicationSubmission.objects.for_reviewer_settings(
+                request.user, reviewer_settings
+            )
+        else:
+            queryset = ApplicationSubmission.objects.reviewed_by(request.user)
+
+        # Reviewer can't view submission which is not listed in ReviewerSubmissionsTable
+        if not queryset.filter(id=submission.id).exists():
+            raise PermissionDenied
         return super().dispatch(request, *args, **kwargs)
 
 
@@ -875,14 +924,30 @@ class BaseSubmissionEditView(UpdateView):
         return super().dispatch(request, *args, **kwargs)
 
     def buttons(self):
-        yield ('save', 'white', 'Save Draft')
         yield ('submit', 'primary', 'Submit')
+        yield ('save', 'white', 'Save Draft')
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         instance = kwargs.pop('instance').from_draft()
-        kwargs['initial'] = instance.raw_data
+        initial = instance.raw_data
+        for field_id in instance.file_field_ids:
+            initial.pop(field_id + '-placeholder', False)
+            initial[field_id] = self.get_placeholder_file(
+                instance.raw_data.get(field_id)
+            )
+        kwargs['initial'] = initial
         return kwargs
+
+    def get_placeholder_file(self, initial_file):
+        if not isinstance(initial_file, list):
+            return PlaceholderUploadedFile(
+                initial_file.filename, size=initial_file.size, file_id=initial_file.name
+            )
+        return [
+            PlaceholderUploadedFile(f.filename, size=f.size, file_id=f.name)
+            for f in initial_file
+        ]
 
     def get_context_data(self, **kwargs):
         return super().get_context_data(buttons=self.buttons(), **kwargs)
@@ -912,6 +977,9 @@ class AdminSubmissionEditView(BaseSubmissionEditView):
                     related=revision,
                 )
 
+        # Required for django-file-form: delete temporary files for the new files
+        # uploaded while edit.
+        form.delete_temporary_files()
         return HttpResponseRedirect(self.get_success_url())
 
 
@@ -971,6 +1039,9 @@ class ApplicantSubmissionEditView(BaseSubmissionEditView):
                 notify=not (revision or submitting_proposal) or self.object.status == DRAFT_STATE,  # Use the other notification
             )
 
+        # Required for django-file-form: delete temporary files for the new files
+        # uploaded while edit.
+        form.delete_temporary_files()
         return HttpResponseRedirect(self.get_success_url())
 
 
@@ -1134,6 +1205,7 @@ class SubmissionDetailPDFView(SingleObjectMixin, View):
 
     def get(self, request, *args, **kwargs):
         self.object = self.get_object()
+        pdf_page_settings = PDFPageSettings.for_request(request)
         content = draw_submission_content(
             self.object.output_text_answers()
         )
@@ -1150,7 +1222,8 @@ class SubmissionDetailPDFView(SingleObjectMixin, View):
                         f"Lead: { self.object.lead }",
                     ],
                 },
-            ]
+            ],
+            pagesize=pdf_page_settings.download_page_size,
         )
         return FileResponse(
             pdf,

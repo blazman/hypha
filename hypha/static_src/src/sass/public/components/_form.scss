@@ -95,6 +95,7 @@
         // sass-lint:disable class-name-format
         &--image_field,
         &--multi_file_field,
+        &--single_file_field,
         &--file_field {
             @include button($color--light-blue, $color--dark-blue);
             max-width: 290px;
@@ -145,7 +146,6 @@
     }
 
     &__help-link {
-        text-align: right;
     }
 
     &__open-icon {
@@ -278,7 +278,7 @@
     [type='radio'],
     [type='checkbox'] {
         position: absolute;
-        top: 10px;
+        top: 5px;
         left: 5px;
         z-index: -1;
         width: 1px;

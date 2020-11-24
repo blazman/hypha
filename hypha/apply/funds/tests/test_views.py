@@ -25,6 +25,8 @@ from hypha.apply.funds.tests.factories import (
     SealedRoundFactory,
     SealedSubmissionFactory,
 )
+from hypha.apply.funds.workflow import INITIAL_STATE
+from hypha.apply.home.factories import ApplySiteFactory
 from hypha.apply.projects.models import Project
 from hypha.apply.projects.tests.factories import ProjectFactory
 from hypha.apply.review.tests.factories import ReviewFactory
@@ -39,7 +41,7 @@ from hypha.apply.users.tests.factories import (
 from hypha.apply.utils.testing import make_request
 from hypha.apply.utils.testing.tests import BaseViewTestCase
 
-from ..models import ApplicationRevision, ApplicationSubmission
+from ..models import ApplicationRevision, ApplicationSubmission, ReviewerSettings
 from ..views import SubmissionDetailSimplifiedView, SubmissionDetailView
 from .factories import CustomFormFieldsFactory
 
@@ -368,7 +370,6 @@ class TestStaffSubmissionView(BaseSubmissionViewTestCase):
 
         submission = ApplicationSubmissionFactory()
         reviewer_role = ReviewerRoleFactory()
-
         # Phase: received / in_discussion
         # Assign reviewers should not be displayed
         assert_assign_reviewers_not_displayed(submission)
@@ -591,6 +592,10 @@ class TestReviewerSubmissionView(BaseSubmissionViewTestCase):
         super().setUpTestData()
         cls.applicant = ApplicantFactory()
         cls.reviewer_role = ReviewerRoleFactory()
+        apply_site = ApplySiteFactory()
+        reviewer_settings, _ = ReviewerSettings.objects.get_or_create(site_id=apply_site.id)
+        reviewer_settings.use_settings = True
+        reviewer_settings.save()
 
     def test_cant_see_add_determination_primary_action(self):
         def assert_add_determination_not_displayed(submission, button_text):
@@ -671,6 +676,7 @@ class TestReviewerSubmissionView(BaseSubmissionViewTestCase):
     def test_cant_see_assign_reviewers_primary_action(self):
         submission = ApplicationSubmissionFactory(status='internal_review', user=self.applicant, reviewers=[self.user])
         response = self.get_page(submission)
+
         buttons = BeautifulSoup(response.content, 'html5lib').find(class_='sidebar').find_all('a', class_='button--primary', text='Assign reviewers')
         self.assertEqual(len(buttons), 0)
 
@@ -1267,3 +1273,60 @@ class TestReviewerLeaderboard(TestCase):
         self.client.force_login(StaffFactory())
         response = self.client.get('/apply/submissions/reviews/', follow=True, secure=True)
         self.assertEqual(response.status_code, 200)
+
+
+class TestUpdateReviewersMixin(BaseSubmissionViewTestCase):
+    user_factory = StaffFactory
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.staff = StaffFactory.create_batch(4)
+        cls.reviewers = ReviewerFactory.create_batch(4)
+        cls.roles = ReviewerRoleFactory.create_batch(2)
+
+    def post_form(self, submission, reviewer_roles=list(), reviewers=list()):
+        data = {
+            'form-submitted-reviewer_form': '',
+            'reviewer_reviewers': [r.id for r in reviewers]
+        }
+        data.update(
+            **{
+                f'role_reviewer_{slugify(str(role))}': reviewer.id
+                for role, reviewer in zip(self.roles, reviewer_roles)
+            }
+        )
+        return self.post_page(submission, data)
+
+    def test_submission_transition_all_reviewer_roles_not_assigned(self):
+        submission = ApplicationSubmissionFactory(lead=self.user, status=INITIAL_STATE)
+        self.post_form(submission, reviewer_roles=[self.staff[0]])
+        submission = ApplicationSubmission.objects.get(id=submission.id)
+
+        # Submission state shouldn't change when all_reviewer_roles_not_assigned
+        self.assertEqual(
+            submission.status,
+            INITIAL_STATE
+        )
+
+    def test_submission_transition_to_internal_review(self):
+        submission = ApplicationSubmissionFactory(lead=self.user, status=INITIAL_STATE)
+        self.post_form(submission, reviewer_roles=[self.staff[0], self.staff[1]])
+        submission = ApplicationSubmission.objects.get(id=submission.id)
+
+        # Automatically transition the application to "Internal review".
+        self.assertEqual(
+            submission.status,
+            submission.workflow.stepped_phases[2][0].name
+        )
+
+    def test_submission_transition_to_proposal_internal_review(self):
+        submission = ApplicationSubmissionFactory(lead=self.user, status='proposal_discussion', workflow_stages=2)
+        self.post_form(submission, reviewer_roles=[self.staff[0], self.staff[1]])
+        submission = ApplicationSubmission.objects.get(id=submission.id)
+
+        # Automatically transition the application to "Internal review".
+        self.assertEqual(
+            submission.status,
+            'proposal_internal_review'
+        )

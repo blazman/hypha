@@ -53,6 +53,7 @@ from ..workflow import (
     WORKFLOWS,
     UserPermissions,
     active_statuses,
+    ext_or_higher_statuses,
     get_review_active_statuses,
     review_statuses,
 )
@@ -123,6 +124,18 @@ class ApplicationSubmissionQueryset(JSONOrderable):
             qs = qs.filter(reviewers=user)
             # If this user has agreed with a review, then they have reviewed this submission already
             qs = qs.exclude(reviews__opinions__opinion=AGREE, reviews__opinions__author__reviewer=user)
+        return qs.distinct()
+
+    def for_reviewer_settings(self, user, reviewer_settings):
+        qs = self
+        if reviewer_settings.submission == 'reviewed':
+            qs = qs.reviewed_by(user)
+        if reviewer_settings.state == 'ext_state_or_higher':
+            qs = qs.filter(status__in=ext_or_higher_statuses)
+        if reviewer_settings.outcome == 'accepted':
+            qs = qs.filter(status='accepted')
+        if reviewer_settings.assigned:
+            qs = qs.filter(reviewers=user)
         return qs.distinct()
 
     def reviewed_by(self, user):
@@ -972,12 +985,15 @@ class AssignedReviewersQuerySet(models.QuerySet):
     def bulk_create_reviewers(self, reviewers, submission):
         group = Group.objects.get(name=REVIEWER_GROUP_NAME)
         self.bulk_create(
-            self.model(
-                submission=submission,
-                role=None,
-                reviewer=reviewer,
-                type=group,
-            ) for reviewer in reviewers
+            [
+                self.model(
+                    submission=submission,
+                    role=None,
+                    reviewer=reviewer,
+                    type=group,
+                ) for reviewer in reviewers
+            ],
+            ignore_conflicts=True
         )
 
     def update_role(self, role, reviewer, *submissions):

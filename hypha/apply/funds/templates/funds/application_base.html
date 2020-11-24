@@ -50,13 +50,19 @@
                 {% else %}
                     {% if field.group_number > 1 %}
                         <div class="field-group-{{ field.group_number }}{% if not show_all_group_fields %} js-hidden{% endif %}">
-                            {{ field }}
+                            {{ field.block }}
                         </div>
                     {% else %}
-                        {{ field }}
+                        {{ field.block }}
                     {% endif %}
                 {% endif %}
             {% endfor %}
+
+            {# Hidden fields needed e.g. for django-file-form. See `StreamBaseForm.hidden_fields` #}
+            {% for hidden_field in form.hidden_fields %}
+                {{ hidden_field }}
+            {% endfor %}
+
             <button class="link link--button-secondary" type="submit" disabled>Submit for review</button>
             <button class="link link--button-tertiary" type="submit" name="draft" value="Save Draft" formnovalidate>Save Draft</button>
         </form>
