@@ -11,6 +11,8 @@
         "last 2 versions"
     ],
     "dependencies": {
+        "@material-ui/core": "^4.11.1",
+        "@material-ui/icons": "^4.9.1",
         "@rooks/use-interval": "^3.0.1",
         "@svgr/webpack": "^4.2.0",
         "@tinymce/tinymce-react": "^3.6.0",
@@ -27,6 +29,7 @@
         "gulp-touch-cmd": "0.0.1",
         "gulp-uglify": "^3.0.2",
         "humps": "^2.0.1",
+        "invariant": "^2.2.4",
         "js-cookie": "^2.2.0",
         "lodash.isequal": "^4.5.0",
         "lodash.pick": "^4.4.0",

@@ -131,7 +131,7 @@ class LabeledCheckboxColumn(tables.CheckBoxColumn):
 class BaseAdminSubmissionsTable(SubmissionsTable):
     lead = tables.Column(order_by=('lead.full_name',))
     reviews_stats = tables.TemplateColumn(template_name='funds/tables/column_reviews.html', verbose_name=mark_safe("Reviews<div>Assgn.\tComp.</div>"), orderable=False)
-    screening_status = tables.Column(verbose_name="Screening")
+    screening_status = tables.Column(verbose_name="Screening", accessor='screening_statuses')
 
     class Meta(SubmissionsTable.Meta):
         fields = ('title', 'phase', 'stage', 'fund', 'round', 'lead', 'submit_time', 'last_update', 'screening_status', 'reviews_stats')  # type: ignore
@@ -139,6 +139,14 @@ class BaseAdminSubmissionsTable(SubmissionsTable):
 
     def render_lead(self, value):
         return format_html('<span>{}</span>', value)
+
+    def render_screening_status(self, value):
+        try:
+            status = value.get(default=True).title
+        except ScreeningStatus.DoesNotExist:
+            return format_html('<span>{}</span>', 'Awaiting')
+        else:
+            return format_html('<span>{}</span>', status)
 
 
 class AdminSubmissionsTable(BaseAdminSubmissionsTable):
@@ -193,7 +201,7 @@ def get_reviewers(request):
 
 def get_screening_statuses(request):
     return ScreeningStatus.objects.filter(
-        id__in=ApplicationSubmission.objects.all().values('screening_status__id').distinct('screening_status__id'))
+        id__in=ApplicationSubmission.objects.all().values('screening_statuses__id').distinct('screening_statuses__id'))
 
 
 def get_meta_terms(request):
@@ -253,7 +261,7 @@ class SubmissionFilter(filters.FilterSet):
     fund = Select2ModelMultipleChoiceFilter(field_name='page', queryset=get_used_funds, label='Funds')
     lead = Select2ModelMultipleChoiceFilter(queryset=get_round_leads, label='Leads')
     reviewers = Select2ModelMultipleChoiceFilter(queryset=get_reviewers, label='Reviewers')
-    screening_status = Select2ModelMultipleChoiceFilter(queryset=get_screening_statuses, label='Screening', null_label='No Status')
+    screening_statuses = Select2ModelMultipleChoiceFilter(queryset=get_screening_statuses, label='Screening', null_label='No Status')
     meta_terms = Select2ModelMultipleChoiceFilter(queryset=get_meta_terms, label='Terms')
     per_page = filters.ChoiceFilter(choices=PAGE_CHOICES, empty_label=_('Items per page'), label='Per page', method='per_page_handler')
 
